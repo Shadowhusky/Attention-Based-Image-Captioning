@@ -55,14 +55,42 @@ for (let image_path of train_image_paths) {
 // console.log(train_captions[0]);
 // Server.showImage(img_name_vector[0]);
 
-async function load_image(image_path) {
+function load_image(image_path) {
   let img = fs.readFileSync(image_path);
   img = tf.node.decodeJpeg(img, 3);
   img = tf.image.resizeBilinear(img, [299, 299]);
-  console.log("img", img);
-  return img, image_path;
+
+  return { img, image_path };
 }
 
-load_image(train_image_paths[0]);
+const main = async () => {
+  const { img, image_path } = await load_image(train_image_paths[0]);
 
-// img = await tf.loadGraphModel("file://src/inception/model.json");
+  const image_model = await tf.loadLayersModel(
+    "file://src/inception/model.json"
+  );
+
+  const new_input = image_model.input;
+  const image_model_layers = image_model.layers;
+  const hidden_layer = image_model_layers[image_model_layers.length - 1].output;
+
+  const image_features_extract_model = tf.model({
+    inputs: new_input,
+    outputs: hidden_layer,
+  });
+
+  // Get unique images
+  const encode_train = [...new Set(img_name_vector)].sort((a, b) => a - b);
+
+  // Feel free to change batch_size according to your system configuration
+  let image_dataset = encode_train.map(load_image);
+  image_dataset = tf.data.array(image_dataset).batch(16);
+
+  await image_dataset.forEachAsync((imgData) => {
+    const { img, image_path } = imgData;
+    console.log({ img, image_path });
+    return
+  });
+};
+
+main();
