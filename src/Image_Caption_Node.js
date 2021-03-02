@@ -1,6 +1,6 @@
 "use strict";
 
-var _ = require("lodash");
+const _ = require("lodash");
 
 const annotation_folder = __dirname + "/annotations/";
 const annotation_file = annotation_folder + "captions_train2014.json";
@@ -39,7 +39,7 @@ image_paths = _.shuffle(image_paths);
 // Approximately each image id has 5 captions associated with it, so that will
 // lead to 30,000 examples.
 
-const train_image_paths = image_paths.slice(0, 6000);
+const train_image_paths = image_paths.slice(0, 100);
 
 const train_captions = [],
   img_name_vector = [];
@@ -82,15 +82,43 @@ const main = async () => {
   // Get unique images
   const encode_train = [...new Set(img_name_vector)].sort((a, b) => a - b);
 
-  // Feel free to change batch_size according to your system configuration
-  let image_dataset = encode_train.map(load_image);
-  image_dataset = tf.data.array(image_dataset).batch(16);
+  const extractAndSaveFeatureVector = async () => {
+    // Feel free to change batch_size according to your system configuration
+    let image_dataset;
 
-  await image_dataset.forEachAsync((imgData) => {
-    const { img, image_path } = imgData;
-    console.log({ img, image_path });
-    return
-  });
+    image_dataset = encode_train.map(load_image);
+    image_dataset = tf.data.array(image_dataset).batch(16);
+
+    await image_dataset.forEachAsync((imgData) => {
+      const { img, image_path } = imgData;
+      let batch_features = image_features_extract_model.predict(img);
+      batch_features = batch_features.reshape([
+        batch_features.shape[0],
+        -1,
+        batch_features.shape[3],
+      ]);
+      for (let pack of _.zip(
+        batch_features.arraySync(),
+        image_path.arraySync()
+      )) {
+        fs.writeFileSync(
+          pack[1] + ".temp",
+          JSON.stringify({
+            data: pack[0],
+            shape: batch_features.shape,
+          }),
+          "utf-8"
+        );
+      }
+    });
+  };
+
+  // await extractAndSaveFeatureVector();
+};
+
+const load_batch_features = (image_dataset_file) => {
+  let temp = JSON.parse(fs.readFileSync(image_dataset_file));
+  return tf.tensor(temp.data, temp.shape);
 };
 
 main();
