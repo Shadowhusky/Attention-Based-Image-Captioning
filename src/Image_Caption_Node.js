@@ -13,9 +13,9 @@ const Server = require("./Server");
 
 const tf = require("@tensorflow/tfjs-node");
 
-const { tokenizerFromJson, Tokenizer } = require("tf_node_tokenizer");
+const { Tokenizer } = require("tf_node_tokenizer");
 
-
+const iniModel = require("./model/models");
 
 const initialize = () => {
   let annotations = JSON.parse(fs.readFileSync(annotation_file));
@@ -205,29 +205,85 @@ const main = async () => {
   const embedding_dim = 256;
   const units = 512;
   const vocab_size = top_k + 1;
-  const num_steps = img_name_train.length; 
+  const num_steps = img_name_train.length;
   // Shape of the vector extracted from InceptionV3 is (64, 2048)
   // These two variables represent that vector shape
   const features_shape = 2048;
   const attention_features_shape = 64;
 
-  const dataset = tf.data.array(_.zip(img_name_train, cap_train));
+  let dataset = tf.data.array(_.zip(img_name_train, cap_train));
 
   // Use map to load the cached bf files in parallel
   dataset = dataset.map(({ 0: img, 1: cap }) => {
-    load_batch_features(img, cap);
+    return load_batch_features(img, cap);
   });
 
   // Shuffle and batch
   dataset = dataset.shuffle(BUFFER_SIZE).batch(BATCH_SIZE);
-  dataset = dataset.prefetch(6);
+  // dataset = dataset.prefetch(6);
 
-  // Model
+  // Train the model
+  await trainModel(dataset, tokenizer, {
+    num_steps,
+    embedding_dim,
+    units,
+    vocab_size,
+  });
 };
 
 const load_batch_features = (img_name, cap) => {
-  let temp = JSON.parse(fs.readFileSync(img_name));
-  return { img_tensor: tf.tensor(temp.data, temp.shape), cap };
+  let temp = JSON.parse(fs.readFileSync(img_name + ".temp"));
+  return {
+    img_tensor: tf.tensor(temp.data, [temp.shape[1], temp.shape[2]]),
+    cap,
+  };
 };
 
 main();
+
+const trainModel = async (dataset, tokenizer, options) => {
+  const { num_steps, embedding_dim, units, vocab_size } = options;
+  const EPOCHS = 2;
+
+  const Model = new iniModel(embedding_dim, units, vocab_size);
+  
+  for (let epoch = 0; epoch < EPOCHS; epoch++) {
+    const start = new Date().getMilliseconds();
+    let total_loss = tf.tensor(0);
+
+    let batch = 0;
+
+    await dataset.forEachAsync(({ img_tensor, cap: target }) => {
+      const { loss: batch_loss, total_loss: t_loss } = Model.train_step(
+        img_tensor,
+        target,
+        tokenizer
+      );
+      total_loss = total_loss.add(t_loss);
+
+      if (batch++ % 5 === 0) {
+        const lossData = batch_loss.dataSync()[0];
+        console.log(
+          `Epoch ${epoch + 1} Batch ${batch} Loss ${
+            lossData / parseInt(target.shape[1])
+          }`
+        );
+      }
+    });
+
+    if (epoch % 5 === 0) {
+      // Save model
+    }
+
+    console.log(
+      `Epoch ${epoch + 1} Loss ${
+        total_loss.div(tf.tensor(num_steps)).dataSync()[0]
+      }`
+    );
+    console.log(
+      t`Time taken for 1 epoch ${
+        (new Date().getMilliseconds() - start) / 1000
+      } sec`
+    );
+  }
+};
