@@ -9,13 +9,12 @@ const image_folder = __dirname + "/train2014/";
 
 const fs = require("fs");
 
-const Server = require("./Server");
-
 const tf = require("@tensorflow/tfjs-node");
 
 const { Tokenizer } = require("tf_node_tokenizer");
 
 const iniModel = require("./model/models");
+const { model } = require("@tensorflow/tfjs-node");
 
 const initialize = () => {
   let annotations = JSON.parse(fs.readFileSync(annotation_file));
@@ -61,7 +60,6 @@ const initialize = () => {
 };
 
 // console.log(train_captions[0]);
-// Server.showImage(img_name_vector[0]);
 
 function load_image(image_path) {
   let img = fs.readFileSync(image_path);
@@ -153,11 +151,10 @@ const main = async () => {
     return seqs.map((seq) => padSeq(seq));
   };
 
-  const top_k = 5000;
+  const top_k = 8000;
   const tokenizer = new Tokenizer({
     num_words: top_k,
     oov_token: "<ukn>",
-    filters: '!"#$%&()*+.,-/:;=?@[]^_`{|}~ ',
   });
   tokenizer.fitOnTexts(train_captions);
   tokenizer.word_index["<pad>"] = 0;
@@ -205,13 +202,15 @@ const main = async () => {
   const embedding_dim = 256;
   const units = 512;
   const vocab_size = top_k + 1;
-  const num_steps = img_name_train.length;
+  const num_steps = parseInt(img_name_train.length / 31);
   // Shape of the vector extracted from InceptionV3 is (64, 2048)
   // These two variables represent that vector shape
   const features_shape = 2048;
   const attention_features_shape = 64;
 
-  let dataset = tf.data.array(_.zip(img_name_train, cap_train));
+  let dataset = tf.data.array(
+    _.shuffle(_.zip(img_name_train, cap_train)).slice(0, num_steps)
+  );
 
   // Use map to load the cached bf files in parallel
   dataset = dataset.map(({ 0: img, 1: cap }) => {
@@ -220,15 +219,26 @@ const main = async () => {
 
   // Shuffle and batch
   dataset = dataset.shuffle(BUFFER_SIZE).batch(BATCH_SIZE);
-  // dataset = dataset.prefetch(6);
+  dataset = dataset.prefetch(64);
 
   // Train the model
-  await trainModel(dataset, tokenizer, {
-    num_steps,
-    embedding_dim,
-    units,
-    vocab_size,
-  });
+  const Model = await trainModel(
+    dataset,
+    tokenizer,
+    {
+      num_steps,
+      embedding_dim,
+      units,
+      vocab_size,
+    },
+    {
+      image_features_extract_model,
+      tokenizer,
+      max_length,
+      img_name_val,
+      cap_val,
+    }
+  );
 };
 
 const load_batch_features = (img_name, cap) => {
@@ -239,14 +249,24 @@ const load_batch_features = (img_name, cap) => {
   };
 };
 
-main();
+const saved_model_path = __dirname + "/model/saved_model";
 
-const trainModel = async (dataset, tokenizer, options) => {
+const saveModel = (model) => {
+  model.encoder.save("file://" + saved_model_path);
+};
+
+const trainModel = async (dataset, tokenizer, options, evaConfig) => {
   const { num_steps, embedding_dim, units, vocab_size } = options;
-  const EPOCHS = 2;
+  const EPOCHS = 5;
 
-  const Model = new iniModel(embedding_dim, units, vocab_size);
-  
+  let Model;
+
+  try {
+    Model = JSON.parse(fs.readFileSync(saved_model_path));
+  } catch (err) {
+    Model = new iniModel(embedding_dim, units, vocab_size);
+  }
+
   for (let epoch = 0; epoch < EPOCHS; epoch++) {
     const start = new Date().getMilliseconds();
     let total_loss = tf.tensor(0);
@@ -264,10 +284,12 @@ const trainModel = async (dataset, tokenizer, options) => {
       if (batch++ % 5 === 0) {
         const lossData = batch_loss.dataSync()[0];
         console.log(
-          `Epoch ${epoch + 1} Batch ${batch} Loss ${
+          `Epoch ${epoch} Batch ${batch} Loss ${
             lossData / parseInt(target.shape[1])
           }`
         );
+        testOnImg({ Model, ...evaConfig });
+        // saveModel(Model);
       }
     });
 
@@ -281,9 +303,85 @@ const trainModel = async (dataset, tokenizer, options) => {
       }`
     );
     console.log(
-      t`Time taken for 1 epoch ${
+      `Time taken for 1 epoch ${
         (new Date().getMilliseconds() - start) / 1000
       } sec`
     );
   }
 };
+
+function evaluate(
+  image,
+  Model,
+  image_features_extract_model,
+  tokenizer,
+  max_length
+) {
+  const { encoder, decoder } = Model;
+  let hidden = decoder.reset_state(1);
+
+  const temp_input = tf.expandDims(load_image(image).img, 0);
+  let img_tensor_val = image_features_extract_model.predict(temp_input);
+  img_tensor_val = tf.reshape(img_tensor_val, [
+    img_tensor_val.shape[0],
+    -1,
+    img_tensor_val.shape[3],
+  ]);
+
+  const features = encoder.call(img_tensor_val);
+
+  let dec_input = tf.expandDims([tokenizer.word_index["<start>"]], 0);
+  const result = [];
+
+  for (let i = 0; i < max_length; i++) {
+    const { predictions, hidden: hidden_, attention_weights } = decoder.call(
+      dec_input,
+      features,
+      hidden
+    );
+    hidden = hidden_;
+
+    const predicted_id = tf.multinomial(predictions, 1).arraySync()[0][0];
+    result.push(tokenizer.index_word[predicted_id]);
+
+    if (tokenizer.index_word[predicted_id] == "<end>") {
+      return result;
+    }
+
+    dec_input = tf.expandDims([predicted_id], 0);
+  }
+  return result;
+}
+
+function testOnImg(configs) {
+  const {
+    Model,
+    image_features_extract_model,
+    tokenizer,
+    max_length,
+    img_name_val,
+    cap_val,
+  } = configs;
+  const rid = _.random(0, img_name_val.length);
+  const image = img_name_val[rid];
+  const result = evaluate(
+    image,
+    Model,
+    image_features_extract_model,
+    tokenizer,
+    max_length
+  );
+
+  const real_caption = cap_val[rid]
+    .filter((cap) => cap !== 0)
+    .map((cap) => {
+      return tokenizer.index_word[cap];
+    })
+    .join(" ");
+
+  console.log("Image Path: ", img_name_val[rid]);
+  console.log("Real Caption: ", real_caption);
+  console.log("Prediction Caption: " + result.join(" "));
+}
+
+setTimeout(main, 5000);

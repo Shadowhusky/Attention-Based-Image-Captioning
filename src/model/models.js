@@ -8,15 +8,16 @@ function updateTrainingWeights(...layers) {
   else this.updatedTrainingWeights = true;
   for (layer of layers) {
     if (!layer.trainableWeights) continue;
-    this.trainableWeights = this.trainableWeights.concat(
+    this.trainableWeights_ = this.trainableWeights_.concat(
       layer.trainableWeights.map((_) => _.val)
     );
   }
 }
 
-class BahdanauAttention {
+class BahdanauAttention extends tf.Sequential {
   constructor(units) {
-    this.trainableWeights = [];
+    super(BahdanauAttention);
+    this.trainableWeights_ = [];
     this.W1 = tf.layers.dense({ units });
     this.W2 = tf.layers.dense({ units });
     this.V = tf.layers.dense({ units: 1 });
@@ -54,13 +55,14 @@ class BahdanauAttention {
   }
 }
 
-class CNN_Encoder {
+class CNN_Encoder extends tf.Sequential {
   // Since you have already extracted the features and dumped it using pickle
   // This encoder passes those features through a Fully connected layer
 
   constructor(embedding_dim) {
+    super(CNN_Encoder);
     // shape after fc == (batch_size, 64, embedding_dim
-    this.trainableWeights = [];
+    this.trainableWeights_ = [];
     this.fc = tf.layers.dense({ units: embedding_dim });
   }
 
@@ -72,10 +74,11 @@ class CNN_Encoder {
   }
 }
 
-class RNN_Decoder {
+class RNN_Decoder extends tf.Sequential {
   constructor(embedding_dim, units, vocab_size) {
+    super(RNN_Decoder);
     this.units = units;
-    this.trainableWeights = [];
+    this.trainableWeights_ = [];
     this.embedding = tf.layers.embedding({
       inputDim: vocab_size,
       outputDim: embedding_dim,
@@ -178,8 +181,8 @@ class iniModel {
     );
 
     const attachWeight = (loss) => {
-      for (let weights of decoder.trainableWeights.concat(
-        encoder.trainableWeights
+      for (let weights of decoder.trainableWeights_.concat(
+        encoder.trainableWeights_
       )) {
         loss = weights.sum().mul(tf.tensor(0)).add(loss);
       }
@@ -218,8 +221,8 @@ class iniModel {
 
     let loss = lossFunc(target, dec_input, hidden);
 
-    const trainable_variables = decoder.trainableWeights.concat(
-      encoder.trainableWeights
+    const trainable_variables = decoder.trainableWeights_.concat(
+      encoder.trainableWeights_
     );
 
     const { grads } = tf.variableGrads(
