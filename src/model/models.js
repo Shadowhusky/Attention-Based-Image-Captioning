@@ -21,9 +21,6 @@ class BahdanauAttention extends tf.Sequential {
     this.W1 = tf.layers.dense({ units });
     this.W2 = tf.layers.dense({ units });
     this.V = tf.layers.dense({ units: 1 });
-    return (features, hidden) => {
-      return this.call(features, hidden);
-    };
   }
 
   call(features, hidden) {
@@ -49,9 +46,9 @@ class BahdanauAttention extends tf.Sequential {
     let context_vector = tf.mul(attention_weights, features);
     context_vector = context_vector.sum(1);
 
-    updateTrainingWeights.apply(this, [this.W1, this.W2, this.V]);
+    const bahdanauLayers = [this.W1, this.W2, this.V];
 
-    return { context_vector, attention_weights };
+    return { context_vector, attention_weights, bahdanauLayers };
   }
 }
 
@@ -97,10 +94,11 @@ class RNN_Decoder extends tf.Sequential {
 
   call(x, features, hidden) {
     // defining attention as a separate model
-    const { context_vector, attention_weights } = this.attention(
-      features,
-      hidden
-    );
+    const {
+      context_vector,
+      attention_weights,
+      bahdanauLayers,
+    } = this.attention.call(features, hidden);
 
     // x shape after passing through embedding == (batch_size, 1, embedding_dim)
     x = this.embedding.apply(x);
@@ -108,16 +106,19 @@ class RNN_Decoder extends tf.Sequential {
     // x shape after concatenation == (batch_size, 1, embedding_dim + hidden_size)
     x = tf.concat([context_vector.expandDims(1), x], x.rank - 1);
 
+    // Have to do this hack because of problems with rnn layer
+    // Check https://github.com/tensorflow/tfjs/issues/3550
+    x = x.concat(x, 1);
+
     // passing the concatenated vector to the GRU
+
     let [output, state] = this.gru.apply(x);
     // shape == (batch_size, max_length, hidden_size)
 
-    // Have to do this hack because of problems with rnn layer
-    // Check https://github.com/tensorflow/tfjs/issues/3550
-    output = tf.tensor(output.dataSync(), output.shape);
-    state = tf.tensor(state.dataSync(), state.shape);
-
     x = this.fc1.apply(output);
+
+    // Restore the shape changed by the hack mentioned above
+    x = x.slice([0, 1], [-1]);
 
     // x shape == (batch_size * max_length, hidden_size)
     x = x.reshape([-1, x.shape[2]]);
@@ -131,6 +132,7 @@ class RNN_Decoder extends tf.Sequential {
       this.attention,
       this.gru,
       this.embedding,
+      ...bahdanauLayers,
     ]);
 
     return {
@@ -160,11 +162,12 @@ function loss_function(labels_onehot, pred, labels_index) {
 }
 
 class iniModel {
-  constructor(embedding_dim, units, vocab_size) {
+  constructor(embedding_dim, units, vocab_size, trainable_variables) {
     this.encoder = new CNN_Encoder(embedding_dim);
     this.decoder = new RNN_Decoder(embedding_dim, units, vocab_size);
     this.units = units;
     this.optimizer = tf.train.adam();
+    if (trainable_variables) this.trainable_variables = trainable_variables;
   }
 
   train_step(img_tensor, target, tokenizer) {
@@ -215,15 +218,15 @@ class iniModel {
         // using teacher forcing
         dec_input = currTarget.expandDims(1);
       }
-      loss = attachWeight(loss);
+      // loss = attachWeight(loss);
       return loss;
     };
 
     let loss = lossFunc(target, dec_input, hidden);
 
-    const trainable_variables = decoder.trainableWeights_.concat(
-      encoder.trainableWeights_
-    );
+    const trainable_variables = this.trainable_variables
+      ? this.trainable_variables
+      : decoder.trainableWeights_.concat(encoder.trainableWeights_);
 
     const { grads } = tf.variableGrads(
       () => lossFunc(target, dec_input, hidden),

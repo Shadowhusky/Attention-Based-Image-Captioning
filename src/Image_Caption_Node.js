@@ -135,7 +135,9 @@ const main = async () => {
     });
   };
 
-  if (!initialized) await extractAndSaveFeatureVector();
+  if (!initialized) {
+    await extractAndSaveFeatureVector();
+  }
 
   const calc_max_length = (seqs) => {
     return _.max(seqs.map((seq) => seq.length));
@@ -222,7 +224,7 @@ const main = async () => {
   dataset = dataset.prefetch(64);
 
   // Train the model
-  const Model = await trainModel(
+  await trainModel(
     dataset,
     tokenizer,
     {
@@ -268,10 +270,12 @@ const trainModel = async (dataset, tokenizer, options, evaConfig) => {
   }
 
   for (let epoch = 0; epoch < EPOCHS; epoch++) {
-    const start = new Date().getMilliseconds();
+    const start = new Date().getTime();
     let total_loss = tf.tensor(0);
 
     let batch = 0;
+
+    const iter = dataset.iterator;
 
     await dataset.forEachAsync(({ img_tensor, cap: target }) => {
       const { loss: batch_loss, total_loss: t_loss } = Model.train_step(
@@ -303,8 +307,8 @@ const trainModel = async (dataset, tokenizer, options, evaConfig) => {
       }`
     );
     console.log(
-      `Time taken for 1 epoch ${
-        (new Date().getMilliseconds() - start) / 1000
+      `Time taken for epoch ${epoch + 1}: ${
+        (new Date().getTime() - start) / 1000
       } sec`
     );
   }
@@ -384,4 +388,4 @@ function testOnImg(configs) {
   console.log("Prediction Caption: " + result.join(" "));
 }
 
-setTimeout(main, 5000);
+main();
