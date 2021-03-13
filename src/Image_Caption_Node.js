@@ -14,7 +14,6 @@ const tf = require("@tensorflow/tfjs-node");
 const { Tokenizer } = require("tf_node_tokenizer");
 
 const iniModel = require("./model/models");
-const { model } = require("@tensorflow/tfjs-node");
 
 const initialize = () => {
   let annotations = JSON.parse(fs.readFileSync(annotation_file));
@@ -204,15 +203,13 @@ const main = async () => {
   const embedding_dim = 256;
   const units = 512;
   const vocab_size = top_k + 1;
-  const num_steps = parseInt(img_name_train.length / 31);
+  const num_steps = img_name_train.length;
   // Shape of the vector extracted from InceptionV3 is (64, 2048)
   // These two variables represent that vector shape
   const features_shape = 2048;
   const attention_features_shape = 64;
 
-  let dataset = tf.data.array(
-    _.shuffle(_.zip(img_name_train, cap_train)).slice(0, num_steps)
-  );
+  let dataset = tf.data.array(_.shuffle(_.zip(img_name_train, cap_train)));
 
   // Use map to load the cached bf files in parallel
   dataset = dataset.map(({ 0: img, 1: cap }) => {
@@ -251,20 +248,46 @@ const load_batch_features = (img_name, cap) => {
   };
 };
 
-const saved_model_path = __dirname + "/model/saved_model";
+const saved_model_path = __dirname + "/model/saved_model.json";
 
-const saveModel = (model) => {
-  model.encoder.save("file://" + saved_model_path);
+const saveModel = (trainable_variables) => {
+  try {
+    if (!trainable_variables || !trainable_variables[0].name_) {
+      return;
+    }
+    fs.writeFileSync(
+      saved_model_path,
+      JSON.stringify(
+        trainable_variables.map((variable) => {
+          return {
+            data: variable.arraySync(),
+            shape: variable.shape,
+            name_: variable.name_,
+          };
+        })
+      ),
+      "utf-8"
+    );
+  } catch (err) {
+    console.error("saveModel ", err);
+  }
 };
 
 const trainModel = async (dataset, tokenizer, options, evaConfig) => {
   const { num_steps, embedding_dim, units, vocab_size } = options;
-  const EPOCHS = 5;
+  const EPOCHS = 10;
 
   let Model;
 
   try {
-    Model = JSON.parse(fs.readFileSync(saved_model_path));
+    const trainable_variables = JSON.parse(
+      fs.readFileSync(saved_model_path)
+    ).map((variable) => {
+      const variable_ = tf.tensor(variable.data, variable.shape);
+      variable_.name_ = variable.name_;
+      return variable_;
+    });
+    Model = new iniModel(embedding_dim, units, vocab_size, trainable_variables);
   } catch (err) {
     Model = new iniModel(embedding_dim, units, vocab_size);
   }
@@ -275,17 +298,19 @@ const trainModel = async (dataset, tokenizer, options, evaConfig) => {
 
     let batch = 0;
 
-    const iter = dataset.iterator;
-
     await dataset.forEachAsync(({ img_tensor, cap: target }) => {
-      const { loss: batch_loss, total_loss: t_loss } = Model.train_step(
-        img_tensor,
-        target,
-        tokenizer
-      );
+      // Executes the provided function fn and after it is executed, cleans up all intermediate tensors allocated by fn except those returned by fn.
+      const {
+        loss: batch_loss,
+        total_loss: t_loss,
+        trainable_variables,
+      } = tf.tidy(() => {
+        return Model.train_step(img_tensor, target, tokenizer);
+      });
       total_loss = total_loss.add(t_loss);
 
       if (batch++ % 5 === 0) {
+        console.log("Number of tensors: " + tf.memory().numTensors);
         const lossData = batch_loss.dataSync()[0];
         console.log(
           `Epoch ${epoch} Batch ${batch} Loss ${
@@ -293,7 +318,7 @@ const trainModel = async (dataset, tokenizer, options, evaConfig) => {
           }`
         );
         testOnImg({ Model, ...evaConfig });
-        // saveModel(Model);
+        saveModel(trainable_variables);
       }
     });
 

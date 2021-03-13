@@ -26,3 +26,7 @@ yarn-error.log*
 /src/annotations
 /src/train2014
 /src/inception
+/src/temp
+/src/model/saved_model
+/model.h5
+/checkpoints

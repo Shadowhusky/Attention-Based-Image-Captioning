@@ -9,18 +9,39 @@ function updateTrainingWeights(...layers) {
   for (layer of layers) {
     if (!layer.trainableWeights) continue;
     this.trainableWeights_ = this.trainableWeights_.concat(
-      layer.trainableWeights.map((_) => _.val)
+      layer.trainableWeights.map((_) => {
+        const variable = _.val;
+        variable.name_ = layer.name;
+        return variable;
+      })
     );
   }
 }
 
-class BahdanauAttention extends tf.Sequential {
-  constructor(units) {
-    super(BahdanauAttention);
+class BahdanauAttention {
+  constructor(units, trainable_variables) {
     this.trainableWeights_ = [];
-    this.W1 = tf.layers.dense({ units });
-    this.W2 = tf.layers.dense({ units });
-    this.V = tf.layers.dense({ units: 1 });
+    this.W1 = tf.layers.dense({
+      units,
+      name: "bahdanau_dense1",
+      weights: trainable_variables
+        ? trainable_variables["bahdanau_dense1"]
+        : undefined,
+    });
+    this.W2 = tf.layers.dense({
+      units,
+      name: "bahdanau_dense2",
+      weights: trainable_variables
+        ? trainable_variables["bahdanau_dense2"]
+        : undefined,
+    });
+    this.V = tf.layers.dense({
+      units: 1,
+      name: "bahdanau_dense3",
+      weights: trainable_variables
+        ? trainable_variables["bahdanau_dense3"]
+        : undefined,
+    });
   }
 
   call(features, hidden) {
@@ -52,15 +73,20 @@ class BahdanauAttention extends tf.Sequential {
   }
 }
 
-class CNN_Encoder extends tf.Sequential {
+class CNN_Encoder {
   // Since you have already extracted the features and dumped it using pickle
   // This encoder passes those features through a Fully connected layer
 
-  constructor(embedding_dim) {
-    super(CNN_Encoder);
+  constructor(embedding_dim, trainable_variables) {
     // shape after fc == (batch_size, 64, embedding_dim
     this.trainableWeights_ = [];
-    this.fc = tf.layers.dense({ units: embedding_dim });
+    this.fc = tf.layers.dense({
+      units: embedding_dim,
+      name: "encoder_dense",
+      weights: trainable_variables
+        ? trainable_variables["encoder_dense"]
+        : undefined,
+    });
   }
 
   call(x) {
@@ -71,25 +97,44 @@ class CNN_Encoder extends tf.Sequential {
   }
 }
 
-class RNN_Decoder extends tf.Sequential {
-  constructor(embedding_dim, units, vocab_size) {
-    super(RNN_Decoder);
+class RNN_Decoder {
+  constructor(embedding_dim, units, vocab_size, trainable_variables) {
     this.units = units;
     this.trainableWeights_ = [];
     this.embedding = tf.layers.embedding({
       inputDim: vocab_size,
       outputDim: embedding_dim,
+      name: "decoder_embedding",
+      weights: trainable_variables
+        ? trainable_variables["decoder_embedding"]
+        : undefined,
     });
     this.gru = tf.layers.gru({
       units: units,
       returnSequences: true,
       returnState: true,
       recurrentInitializer: "glorotUniform",
+      name: "decoder_gru",
+      weights: trainable_variables
+        ? trainable_variables["decoder_gru"]
+        : undefined,
     });
-    this.fc1 = tf.layers.dense({ units: units });
-    this.fc2 = tf.layers.dense({ units: vocab_size });
+    this.fc1 = tf.layers.dense({
+      units: units,
+      name: "decoder_dense1",
+      weights: trainable_variables
+        ? trainable_variables["decoder_dense1"]
+        : undefined,
+    });
+    this.fc2 = tf.layers.dense({
+      units: vocab_size,
+      name: "decoder_dense2",
+      weights: trainable_variables
+        ? trainable_variables["decoder_dense2"]
+        : undefined,
+    });
 
-    this.attention = new BahdanauAttention(units);
+    this.attention = new BahdanauAttention(units, trainable_variables);
   }
 
   call(x, features, hidden) {
@@ -163,14 +208,33 @@ function loss_function(labels_onehot, pred, labels_index) {
 
 class iniModel {
   constructor(embedding_dim, units, vocab_size, trainable_variables) {
-    this.encoder = new CNN_Encoder(embedding_dim);
-    this.decoder = new RNN_Decoder(embedding_dim, units, vocab_size);
+    if (trainable_variables) {
+      this.trainable_variables = {};
+      trainable_variables.forEach((variable) => {
+        let nameWeightsMap = this.trainable_variables[variable.name_];
+        if (nameWeightsMap) {
+          nameWeightsMap.push(variable);
+        } else {
+          this.trainable_variables[variable.name_] = [variable];
+        }
+      });
+    }
+
+    this.encoder = new CNN_Encoder(embedding_dim, this.trainable_variables);
+    this.decoder = new RNN_Decoder(
+      embedding_dim,
+      units,
+      vocab_size,
+      this.trainable_variables
+    );
     this.units = units;
     this.optimizer = tf.train.adam();
-    if (trainable_variables) this.trainable_variables = trainable_variables;
   }
 
   train_step(img_tensor, target, tokenizer) {
+    const trainable_variables_saved = this.trainable_variables
+      ? this.trainable_variables
+      : null;
     const decoder = this.decoder;
     const encoder = this.encoder;
 
@@ -182,15 +246,6 @@ class iniModel {
       Array(target.shape[0]).fill(tokenizer.word_index["<start>"]),
       1
     );
-
-    const attachWeight = (loss) => {
-      for (let weights of decoder.trainableWeights_.concat(
-        encoder.trainableWeights_
-      )) {
-        loss = weights.sum().mul(tf.tensor(0)).add(loss);
-      }
-      return loss;
-    };
 
     const lossFunc = (target, dec_input, hidden) => {
       const features = encoder.call(img_tensor);
@@ -224,9 +279,9 @@ class iniModel {
 
     let loss = lossFunc(target, dec_input, hidden);
 
-    const trainable_variables = this.trainable_variables
-      ? this.trainable_variables
-      : decoder.trainableWeights_.concat(encoder.trainableWeights_);
+    const trainable_variables = decoder.trainableWeights_.concat(
+      encoder.trainableWeights_
+    );
 
     const { grads } = tf.variableGrads(
       () => lossFunc(target, dec_input, hidden),
@@ -237,7 +292,7 @@ class iniModel {
 
     this.optimizer.applyGradients(grads);
 
-    return { loss, total_loss };
+    return { loss, total_loss, trainable_variables };
   }
 }
 
