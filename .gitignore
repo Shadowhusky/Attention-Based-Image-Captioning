@@ -28,5 +28,8 @@ yarn-error.log*
 /src/inception
 /src/temp
 /src/model/saved_model
+/src/model/saved_model.json
 /model.h5
 /checkpoints
+
+image_captioning.ipynb
