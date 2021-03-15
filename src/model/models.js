@@ -251,7 +251,7 @@ class iniModel {
 
     const lossFunc = (target, dec_input, hidden) => {
       const features = encoder.call(img_tensor);
-      let loss = tf.tensor(0);
+      let loss = tf.scalar(0);
       for (let i = 1; i < target.shape[1]; i++) {
         // passing the features through the decoder
         const { predictions, hidden: hidden_ } = decoder.call(
@@ -289,7 +289,7 @@ class iniModel {
       trainable_variables
     );
 
-    const total_loss = loss.div(tf.tensor(target.shape[1]));
+    const total_loss = loss.div(tf.scalar(target.shape[1]));
 
     this.optimizer.applyGradients(grads);
 

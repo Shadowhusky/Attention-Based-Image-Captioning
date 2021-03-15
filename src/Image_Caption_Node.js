@@ -307,36 +307,38 @@ const trainModel = async (
 
   for (let epoch = 0; epoch < EPOCHS; epoch++) {
     const start = new Date().getTime();
-    let total_loss = tf.tensor(0);
+    let total_loss = tf.scalar(0);
 
     let batch = 0;
 
     await dataset.forEachAsync(({ img_tensor, cap: target }) => {
-      // Executes the provided function fn and after it is executed, cleans up all intermediate tensors allocated by fn except those returned by fn.
-      const {
-        loss: batch_loss,
-        total_loss: t_loss,
-        trainable_variables,
-      } = tf.tidy(() => {
-        return Model.train_step(img_tensor, target, tokenizer);
-      });
-      total_loss = total_loss.add(t_loss);
-      if (batch++ % 5 === 0) {
-        console.log("Number of tensors: " + tf.memory().numTensors);
-        const lossData = batch_loss.dataSync()[0];
-        console.log(
-          `Epoch ${epoch} Batch ${batch} Loss ${
-            lossData / parseInt(target.shape[1])
-          }`
-        );
-        testOnImg({ Model, ...evaConfig });
-        saveModel(trainable_variables);
+      if (img_tensor.shape[0] === 64) {
+        // Executes the provided function fn and after it is executed, cleans up all intermediate tensors allocated by fn except those returned by fn.
+        const {
+          loss: batch_loss,
+          total_loss: t_loss,
+          trainable_variables,
+        } = tf.tidy(() => {
+          return Model.train_step(img_tensor, target, tokenizer);
+        });
+        total_loss = total_loss.add(t_loss);
+        if (batch++ % 5 === 0) {
+          console.log("Number of tensors: " + tf.memory().numTensors);
+          const lossData = batch_loss.dataSync()[0];
+          console.log(
+            `Epoch ${epoch} Batch ${batch} Loss ${
+              lossData / parseInt(target.shape[1])
+            }`
+          );
+          testOnImg({ Model, ...evaConfig });
+          saveModel(trainable_variables);
+        }
       }
     });
-
+    
     console.log(
       `Epoch ${epoch + 1} Loss ${
-        total_loss.div(tf.tensor(num_steps)).dataSync()[0]
+        total_loss.div(tf.scalar(num_steps)).dataSync()[0]
       }`
     );
     console.log(
