@@ -1,4 +1,3 @@
-const { onesLike } = require("@tensorflow/tfjs-node");
 const tf = require("@tensorflow/tfjs-node");
 
 const _ = require("lodash");
@@ -61,7 +60,11 @@ class BahdanauAttention {
     const score = this.V.apply(attention_hidden_layer);
 
     // attention_weights shape == (batch_size, 64, 1)
-    const attention_weights = score.softmax();
+    // tensorflowjs softmax function dos not support non-last dimension
+    // According to tf.nn.softmax in python
+    // https://www.tensorflow.org/api_docs/python/tf/nn/softmax
+    // softmax = tf.exp(logits) / tf.reduce_sum(tf.exp(logits), axis)
+    const attention_weights = tf.div(score.exp(), tf.sum(score.exp(), 1));
 
     // context_vector shape after sum == (batch_size, hidden_size)
     let context_vector = tf.mul(attention_weights, features);
@@ -111,8 +114,10 @@ class RNN_Decoder {
     });
     this.gru = tf.layers.gru({
       units: units,
+      recurrentActivation: "sigmoid",
       returnSequences: true,
       returnState: true,
+      kernelInitializer: "glorotUniform",
       recurrentInitializer: "glorotUniform",
       name: "decoder_gru",
       weights: trainable_variables
@@ -232,9 +237,6 @@ class iniModel {
   }
 
   train_step(img_tensor, target, tokenizer) {
-    const trainable_variables_saved = this.trainable_variables
-      ? this.trainable_variables
-      : null;
     const decoder = this.decoder;
     const encoder = this.encoder;
 
@@ -273,7 +275,6 @@ class iniModel {
         // using teacher forcing
         dec_input = currTarget.expandDims(1);
       }
-      // loss = attachWeight(loss);
       return loss;
     };
 
@@ -283,7 +284,7 @@ class iniModel {
       encoder.trainableWeights_
     );
 
-    const { grads } = tf.variableGrads(
+    const { grads } = this.optimizer.computeGradients(
       () => lossFunc(target, dec_input, hidden),
       trainable_variables
     );
