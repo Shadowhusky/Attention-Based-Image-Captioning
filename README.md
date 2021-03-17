@@ -11,4 +11,4 @@ Will upload the whole project to online storage in the future, before that this 
 
 ### 🚧   In development  🚧
 
-The result will be updated on https://shadowhusky.cn/?app=Image_Captioning after finished (For now this website only do object detection) 
+The result will be updated on https://shadowhusky.cn/?app=Image_Captioning after finished (Under construction, will be available soon, you can test on http://101.133.222.235/?app=Image_Captioning which is the beta version ) 
